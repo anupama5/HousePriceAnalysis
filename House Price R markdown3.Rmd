@@ -1,0 +1,675 @@
+---
+title: "House Price R markdown"
+author: "Anu Narendran"
+date: "November 14, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(MASS)
+library(corrplot)
+library(boot)
+library(kernlab)
+library(randomForest)
+library(leaps)
+
+
+```
+
+## Assigment 4 - Data Analysis on Housing data
+
+This is an R Markdown document for the housing market analysis residential homes in Ames, Iowa. The analysis include 79 explanatory variables describing almost every aspect of residential homes. The aim is to predict the sales price of the given list of houses using the 79 features. Given below is the analysis of the 79 variable and the data to come up with the best possible model.
+
+## Clean up the data
+
+Many of the features were loaded as strings in the input files which are converted
+as Categories for Initial analysis. Performed the following to fix the data issues,
+1. Convert character features to numeric
+2. Convert categorical features to numeric
+3. Replace NA/0 for categorial feature with Mode
+4. Replace NA/0 for numeric feature with Mean
+
+## Take a look at the data 
+
+```{r data1, echo=FALSE,warning=FALSE,error=FALSE,comment=''}
+
+rm(list = ls())
+## Set path
+current_path <- setwd("C:/Users/Anu/Downloads/Data Science/Quarter 3/Kaggle Project")
+
+url1 <- "train.csv"
+House.Price.Train <- read.csv(url1, header=T, stringsAsFactors=FALSE)
+
+url2 <- "test.csv"
+House.Price.Test <- read.csv(url2, header=T, stringsAsFactors=FALSE)
+
+#head(House.Price.Train)
+#head(House.Price.Test)
+
+```
+
+## Check for normalization of numeric fields
+The variables SalePrice and LotArea are normalized to match with the rest of the variables.
+```{r plot1, echo=TRUE,warning=FALSE,error=FALSE,comment=''}
+
+par(mfrow = c(2,2))
+LotArea =House.Price.Train$LotArea
+log.LotArea = log2(House.Price.Train$LotArea)
+#plot(SalePrice)
+#plot(log.SalePrice)
+qqnorm(LotArea,main = "Normal Q-Q Plot of LotArea");qqline(LotArea, col = 2)
+qqnorm(log.LotArea,main = "Normal Q-Q Plot of Log2(LotArea)");qqline(log.LotArea, col = 2)
+hist(LotArea)
+hist(log.LotArea)
+par(mfrow = c(1,1))
+
+House.Price.Train$log.LotArea <-log2(House.Price.Train$LotArea)
+House.Price.Test$log.LotArea <-log2(House.Price.Test$LotArea)
+
+par(mfrow = c(2,2))
+SalePrice =House.Price.Train$SalePrice
+log.SalePrice = log10(House.Price.Train$SalePrice)
+#plot(SalePrice)
+#plot(log.SalePrice)
+qqnorm(SalePrice,main = "Normal Q-Q Plot of SalePrice");qqline(SalePrice, col = 2)
+qqnorm(log.SalePrice,main = "Normal Q-Q Plot of Log10(SalePrice)");qqline(log.SalePrice, col = 2)
+hist(SalePrice)
+hist(log.SalePrice)
+par(mfrow = c(1,1))
+
+House.Price.Train$log.SalePrice <-log10(House.Price.Train$SalePrice)
+
+#Remove un-used fields
+length(House.Price.Train)
+drops1 <- c("SalePrice","LotArea")
+House.Price.Train <- House.Price.Train[ , !(names(House.Price.Train) %in% drops1)]
+House.Price.Test  <-House.Price.Test[ , !(names(House.Price.Test) %in% drops1)]
+length(House.Price.Train)
+names(House.Price.Train)
+
+```
+
+Log10(Saleprice) looks more normalized that the original value. So we will choose Log10(Saleprice) for further analysis.
+
+## Move the character fields to a new dataframe based on the correlation(> 0.34).
+## Move all the integer fields to the new data frame
+```{r price, echo=FALSE,warning=FALSE,error=FALSE,comment=''}
+
+#head(House.Price.Train)
+#colnames(House.Price.Train)
+
+fn.analysis.train <- function(column.data,name){
+
+if (sum(is.na(column.data)) > 0)
+{
+  column.data[is.na(column.data)]<-"Missing"
+}
+df <- data.frame(name = column.data)
+new.val<-data.frame(cbind(with(df, model.matrix(~ name + 0))))
+
+for (i in 1:(length(new.val))) {
+  names(new.val)[i] <- paste(name, names(new.val)[i], sep = ".")
+}
+new.val$Log.SalePrice <-House.Price.Train$log.SalePrice
+cors = cor(new.val, method = 'pearson')
+corrplot(cors, method = 'number')
+
+a<-cors[,length(new.val)]
+col.names <- NULL
+for (i in 1:(length(new.val)-1)) {
+
+  if(abs(cors[i,length(new.val)]) > 0.34)
+  {
+    col.names <- c(col.names, names(a[i]))
+  }
+}
+#print(head(new.val[col.names]))
+return(new.val[col.names])
+}
+#df <-House.Price.Train[0]
+fn.new.df.train <- function(df){
+  new.df <-df[0]
+  for (i in 1:(ncol(df)-1)) {
+    
+  if (sum(is.na(df[,i])) < 500)
+    {
+  
+      if (typeof(df[,i]) == "character")
+      {
+      new.df <- cbind(new.df,
+            fn.analysis.train(df[,i],colnames(df[i])))
+      }
+    
+      if ((typeof(df[,i]) == "integer") ||
+           (typeof(df[,i]) == "double"))
+      {
+        a<-NULL
+        a <-as.data.frame(df[i])
+        names(a) <- c(names(df[i]))
+        #Replace NAs with Mean
+        a[is.na(a)] <-mean(df[,i],na.rm = T)
+        #Replace NAs with 0
+#        a[is.na(a)] <-0
+        #  Normalize the fields    
+        min_df <- min(df[i], na.rm = T)
+        max_df <- max(df[i], na.rm = T)
+        nrow_df <- nrow(df[i])
+#        print(nrow_df)
+          a <-(a - min_df)/(max_df - min_df)
+ 
+        new.df <- cbind(new.df,a)
+
+     } 
+  }
+  else
+  {
+    cat("\nSkipped due to ",sum(is.na(df[,i])),"NAs: ", names(df[i]))
+  }
+}
+
+  return(new.df)
+}
+
+fn.new.df.test <- function(df){
+  new.df <-df[0]
+  for (i in 1:(ncol(df))) {
+    
+  if (sum(is.na(df[,i])) < 500)
+    {
+  
+      if (typeof(df[,i]) == "character")
+      {
+      new.df <- cbind(new.df,
+            fn.analysis.test(df[,i],colnames(df[i])))
+      }
+    
+      if ((typeof(df[,i]) == "integer") ||
+           (typeof(df[,i]) == "double"))
+      {
+        a<-NULL
+        a <-as.data.frame(df[i])
+        names(a) <- c(names(df[i]))
+        #Replace NAs with Mean
+        a[is.na(a)] <- mean(df[,i],na.rm = T)
+        #  Normalize the fields    
+        min_df <- min(df[i], na.rm = T)
+        max_df <- max(df[i], na.rm = T)
+        nrow_df <- nrow(df[i])
+#        print(nrow_df)
+        a <-(a - min_df)/(max_df - min_df)
+        #Replace NAs with 0
+        a[is.na(a)] <- 0
+        new.df <- cbind(new.df,a)
+
+     } 
+  }
+  else
+  {
+    cat("\nSkipped due to ",sum(is.na(df[,i])),"NAs: ", names(df[i]))
+  }
+}
+
+  return(new.df)
+}
+
+fn.analysis.test <- function(column.data,name){
+
+if (sum(is.na(column.data)) > 0)
+{
+  column.data[is.na(column.data)]<-"Missing"
+}
+df <- data.frame(name = column.data)
+new.val<-data.frame(cbind(with(df, model.matrix(~ name + 0))))
+
+for (i in 1:(length(new.val))) {
+  names(new.val)[i] <- paste(name, names(new.val)[i], sep = ".")
+}
+
+return(new.val)
+}
+
+
+new.House.Price.Train <- House.Price.Train[0]
+new.House.Price.Train$log.SalePrice <- House.Price.Train$log.SalePrice
+new.House.Price.Train <- cbind(new.House.Price.Train,
+                               fn.new.df.train(House.Price.Train))
+length(new.House.Price.Train)
+names(new.House.Price.Train)
+
+new.House.Price.Test <- House.Price.Test[0]
+new.House.Price.Test <-fn.new.df.test(House.Price.Test)
+length(new.House.Price.Test)
+
+#Mode function
+(getMode <- function(x) {
+  uv<- na.omit(x)
+  ux <- unique(uv)
+  ux[which.max(tabulate(match(uv, ux)))]
+})
+
+```
+
+
+#Created few new features which seeems to be more correlated to the label.
+#Remove the unused features
+
+```{r newfeature, echo=TRUE,warning=FALSE,error=FALSE,comment=''}
+## Create new feature TotalBatch
+
+
+new.features <- function(df) {
+ 
+df$TotalBath <- df$FullBath + df$HalfBath + df$BsmtFullBath + df$BsmtHalfBath
+
+
+## Create new feature Total Squarefootage
+df$TotalSF <- df$X1stFlrSF + df$X2ndFlrSF + df$TotalBsmtSF
+
+
+## Create new feature Total Yearbuilt
+df$age <- ifelse((df$YearRemodAdd-df$YearBuilt) > 0, 
+                   (df$YrSold-df$YearRemodAdd),(df$YrSold-df$YearBuilt))
+
+df$garage_age <- df$YrSold- df$GarageYrBlt
+
+#distinguish with more than 50 and 100 years old
+df$epoch <- ifelse(df$YrSold-
+                       df$YearBuilt >100, 2, ifelse(df$YrSold - df$YearBuilt >50, 1,0))
+
+return(df)
+}
+
+length(new.House.Price.Train)
+new.House.Price.Train <- new.features(new.House.Price.Train)
+length(new.House.Price.Train)
+names(new.House.Price.Train)
+
+#Correlation plots of new feature
+
+cols <- c("log.SalePrice","TotalBath","FullBath","HalfBath","BsmtFullBath",
+          "BsmtHalfBath")  
+cors = cor(new.House.Price.Train[cols], method = 'pearson')
+corrplot(cors, method = "number")
+
+cols <- c("log.SalePrice","TotalSF",
+          "X1stFlrSF","X2ndFlrSF","BsmtUnfSF","TotalBsmtSF")  
+cors = cor(new.House.Price.Train[cols], method = 'pearson')
+corrplot(cors, method = "number")  
+
+cols <- c("log.SalePrice","YearBuilt",
+          "YearRemodAdd","YrSold","GarageYrBlt","age","garage_age","epoch")  
+cors = cor(new.House.Price.Train[cols], method = 'pearson')
+corrplot(cors, method = "number")  
+
+length(new.House.Price.Test)
+new.House.Price.Test <- new.features(new.House.Price.Test)
+length(new.House.Price.Test)
+
+```
+
+## Remove the unused features 
+
+```{r data2, echo=FALSE,warning=FALSE,error=FALSE,comment=''}
+
+drops2 <- c("FullBath","HalfBath","BsmtFullBath","BsmtHalfBath","X1stFlrSF",
+           "X2ndFlrSF","BsmtUnfSF","TotalBsmtSF","YearRemodAdd","YrSold",
+           "GarageYrBlt","age","garage_age","epoch")
+length(new.House.Price.Train)
+new.House.Price.Train <-new.House.Price.Train[ , !(names(new.House.Price.Train) %in% drops2)]
+length(new.House.Price.Train)
+
+length(new.House.Price.Test)
+new.House.Price.Test <-new.House.Price.Test[ , !(names(new.House.Price.Test) %in% drops2)]
+length(new.House.Price.Test)
+
+```
+
+
+## Fix outliers
+Outliers are fixed by replacing the upper limit with 95 quantile values and lower quantiles with 5 quantile values. Sale Price, LotFrontage and LotArea are the fields which were identified having major outliers. So only those variables are fixed. Excluded some of the other records completely which were showing up in the files as outliers.
+
+```{r LM13, echo=TRUE,warning=FALSE,error=FALSE,comment=''}
+## Stepwise regression for feature selection
+
+#x <-House.Price.Train$LotFrontage
+
+
+fixOutlier <- function(x){
+    quantiles <- quantile( x, c(.05, .95 ) )
+    x[ x < quantiles[1] ] <- quantiles[1]
+    x[ x > quantiles[2] ] <- quantiles[2]
+    x
+}
+
+
+par(mfrow = c(2,2))
+plot(new.House.Price.Train$log.SalePrice)
+plot(fixOutlier(new.House.Price.Train$log.SalePrice))
+qqnorm(new.House.Price.Train$log.SalePrice,main = "Normal Q-Q Plot of SalePrice");qqline(new.House.Price.Train$log.SalePrice, col = 2)
+qqnorm(fixOutlier(new.House.Price.Train$log.SalePrice),main = "Normal Q-Q Plot of Fixed-outlier SalePrice");qqline(fixOutlier(new.House.Price.Train$log.SalePrice), col = 2)
+
+new.House.Price.Train$log.SalePrice <-fixOutlier(new.House.Price.Train$log.SalePrice)
+
+par(mfrow = c(2,2))
+plot(new.House.Price.Train$log.LotArea)
+plot(fixOutlier(new.House.Price.Train$log.LotArea))
+qqnorm(new.House.Price.Train$log.LotArea,main = "Normal Q-Q Plot of LotArea");qqline(new.House.Price.Train$log.LotArea, col = 2)
+qqnorm(fixOutlier(new.House.Price.Train$log.LotArea),main = "Normal Q-Q Plot of Fixed-outlier LotArea");qqline(fixOutlier(new.House.Price.Train$log.LotArea), col = 2)
+par(mfrow = c(1,1))
+new.House.Price.Train$log.LotArea <-fixOutlier(new.House.Price.Train$log.LotArea)
+new.House.Price.Test$log.LotArea <-fixOutlier(new.House.Price.Test$log.LotArea)
+
+names(new.House.Price.Train)
+```
+
+
+##  Initial analysis to see how the features are correlated to the Label(Log(SalePrice)). 
+
+```{r plot2, echo=FALSE,warning=FALSE,error=FALSE,comment=''}
+## Loading required package: corrplot
+length(new.House.Price.Train)
+
+cols <- colnames(new.House.Price.Train)[2:10]
+cols <- c(colnames(new.House.Price.Train)[1],cols)
+cors = cor(new.House.Price.Train[cols], method = 'pearson')
+corrplot(cors, method = "number")
+
+cols <- colnames(new.House.Price.Train)[11:20]
+cols <- c(colnames(new.House.Price.Train)[1],cols)
+cors = cor(new.House.Price.Train[cols], method = 'pearson')
+corrplot(cors, method = "number")
+
+cols <- colnames(new.House.Price.Train)[21:30]
+cols <- c(colnames(new.House.Price.Train)[1],cols)
+cors = cor(new.House.Price.Train[cols], method = 'pearson')
+corrplot(cors, method = "number")
+
+cols <- colnames(new.House.Price.Train)[31:40]
+cols <- c(colnames(new.House.Price.Train)[1],cols)
+cors = cor(new.House.Price.Train[cols], method = 'pearson')
+corrplot(cors, method = "number")
+
+cols <- colnames(new.House.Price.Train)[41:50]
+cols <- c(colnames(new.House.Price.Train)[1],cols)
+cors = cor(new.House.Price.Train[cols], method = 'pearson')
+corrplot(cors, method = "number")
+
+
+```
+
+## Remove the non-correlated features 
+
+```{r data3, echo=FALSE,warning=FALSE,error=FALSE,comment=''}
+drops3 <- c("MSSubClass","OverallCond","BsmtFinSF2","LowQualFinSF","BedroomAbvGr",
+           "KitchenAbvGr","EnclosedPorch","X3SsnPorch",
+           "ScreenPorch","PoolArea","MiscVal","MoSold","CentralAir.nameY")
+length(new.House.Price.Train)
+#new.House.Price.Train <-new.House.Price.Train[ , !(names(new.House.Price.Train) %in% drops3)]
+length(new.House.Price.Train)
+
+length(new.House.Price.Test)
+#new.House.Price.Test <-new.House.Price.Test[ , !(names(new.House.Price.Test) %in% drops3)]
+length(new.House.Price.Test)
+
+```
+
+## Check the correlation again. 
+
+```{r plot5, echo=FALSE,warning=FALSE,error=FALSE,comment=''}
+## Loading required package: corrplot
+names(new.House.Price.Train)
+#correlations less than 0.5
+drops4 <- c("MSZoning.nameRM","LotFrontage","Neighborhood.nameNridgHt","MasVnrType.nameNone","MasVnrArea","ExterQual.nameEx","BsmtQual.nameEx","BsmtFinType1.nameGLQ","BsmtFinSF1","HeatingQC.nameE","CentralAir.nameN","KitchenQual.nameEx","KitchenQual.nameGd","GarageType.nameAttchd","GarageType.nameDetchd","GarageFinish.nameFin","GarageFinish.nameUnf","GarageCond.nameTA","WoodDeckSF","OpenPorchSF","log.LotArea")
+
+cols <- colnames(new.House.Price.Train)[2:10]
+cols <- c(colnames(new.House.Price.Train)[1],cols)
+cors = cor(new.House.Price.Train[cols], method = 'pearson')
+corrplot(cors, method = "number")
+
+cols <- colnames(new.House.Price.Train)[11:20]
+cols <- c(colnames(new.House.Price.Train)[1],cols)
+cors = cor(new.House.Price.Train[cols], method = 'pearson')
+corrplot(cors, method = "number")
+
+cols <- colnames(new.House.Price.Train)[21:30]
+cols <- c(colnames(new.House.Price.Train)[1],cols)
+cors = cor(new.House.Price.Train[cols], method = 'pearson')
+corrplot(cors, method = "number")
+
+cols <- colnames(new.House.Price.Train)[31:37]
+cols <- c(colnames(new.House.Price.Train)[1],cols)
+cors = cor(new.House.Price.Train[cols], method = 'pearson')
+corrplot(cors, method = "number")
+
+```
+
+## Remove the Correlated features to other features 
+
+```{r data4, echo=FALSE,warning=FALSE,error=FALSE,comment=''}
+drops5 <- c("YearBuilt","MasVnrType.nameNone","ExterQual.nameGd",
+            "Foundation.namePConc","BsmtQual.nameTA","HeatingQC.nameEx",
+            "KitchenQual.nameGd","GarageType.nameDetchd","GarageFinish.nameUnf",
+            "ExterQual.nameTA","BsmtFinSF1","TotRmsAbvGrd","GarageCars",
+            "GarageArea","GarageCond.nameTA","ExterQual.nameEx","GrLivArea",
+            "TotalBath","KitchenQual.nameTA")
+
+length(new.House.Price.Train)
+#new.House.Price.Train <-new.House.Price.Train[ , !(names(new.House.Price.Train) %in% drops5)]
+length(new.House.Price.Train)
+
+length(new.House.Price.Test)
+#new.House.Price.Test <-new.House.Price.Test[ , !(names(new.House.Price.Test) %in% drops5)]
+length(new.House.Price.Test)
+
+```
+
+## Check the correlation again. 
+
+```{r plot4, echo=FALSE,warning=FALSE,error=FALSE,comment=''}
+## Loading required package: corrplot
+length(new.House.Price.Train)
+names(new.House.Price.Train)
+
+cols <- colnames(new.House.Price.Train)[2:10]
+cols <- c(colnames(new.House.Price.Train)[1],cols)
+cors = cor(new.House.Price.Train[cols], method = 'pearson')
+corrplot(cors, method = "number")
+
+cols <- colnames(new.House.Price.Train)[11:18]
+cols <- c(colnames(new.House.Price.Train)[1],cols)
+cors = cor(new.House.Price.Train[cols], method = 'pearson')
+corrplot(cors, method = "number")
+
+```
+
+
+## Split the data into train and test
+
+```{r LM11, echo=TRUE,warning=FALSE,error=FALSE,comment=''}
+# Funtion for partitioning the test and training data set based on the fraction passed as the input
+PartitionExact <- function(dataSet, fractionOfTest)
+{
+  numberOfRows <- nrow(dataSet)
+  
+  quantileValue <- quantile(runif(numberOfRows),fractionOfTest)
+  testFlag <- runif(numberOfRows) <= quantileValue
+  
+  testingData <- dataSet[testFlag, ]
+  trainingData <- dataSet[!testFlag, ]
+  dataSetSplit <- list(trainingData=trainingData, testingData=testingData)
+  
+}
+# Set repeatable random seed. 
+set.seed(4)
+
+# Partition data between training and testing sets
+DataSplit <- PartitionExact(new.House.Price.Train, fractionOfTest=0.3) 
+House.Price.Train1 <- DataSplit$testingData
+House.Price.Train2 <-DataSplit$trainingData
+#nrow(House.Price.Train1)
+#nrow(House.Price.Train2)
+
+table(House.Price.Train$Alley)
+length(which(!is.na(House.Price.Train$Alley)))
+names(House.Price.Train1)
+
+```
+
+
+## Create a funtion to find the best feature with less cv error.
+
+```{r LM14, echo=TRUE,warning=FALSE,error=FALSE,comment=''}
+names(new.House.Price.Train)
+#drops1 <- c("SalePrice","LotArea")
+#House.Price.Train <- House.Price.Train[ , !(names(House.Price.Train) %in% drops1)]
+formula0.logprice <- log.SalePrice ~ . - Id
+names(new.House.Price.Train)
+
+regfit.full = regsubsets(formula0.logprice , data =  new.House.Price.Train,
+                         really.big = T)
+
+summary(regfit.full)
+plot(regfit.full, scale = "r2")
+plot(regfit.full, scale = "adjr2")
+plot(regfit.full, scale = "Cp")
+plot(regfit.full, scale = "bic")
+
+
+formula0.logprice.reg <- log.SalePrice ~ OverallQual +OverallCond  + YearBuilt +
+  BsmtFinSF1  + TotRmsAbvGrd + GarageType.nameAttchd + GarageArea +
+  TotalBath 
+lm.log.saleprice0.reg = lm(formula0.logprice.reg,data = House.Price.Train1,na.action = na.exclude)
+summary(lm.log.saleprice0.reg)
+#plot(lm.log.saleprice1)
+
+predictions.formula0.reg <- predict(lm.log.saleprice0.reg, House.Price.Train2)
+lm.rmse0.reg <- sqrt(mean((House.Price.Train2$log.SalePrice - predictions.formula0.reg)^2))
+print(lm.rmse0.reg)
+
+lm.log.sAIC0.reg = stepAIC(lm.log.saleprice0.reg, direction = 'both')
+lm.log.sAIC0.reg$anova
+
+fit.glm.reg = glm(formula0.logprice.reg , data = new.House.Price.Train)
+cv.err = cv.glm(new.House.Price.Train, fit.glm.reg, K = 8)$delta[1]
+cv.err
+new.House.Price.Test$Predicted.log.SalesPrice <- predict(fit.glm.reg,
+                                                         new.House.Price.Test)
+new.House.Price.Test$Predicted.SalesPrice = 10 ^ (new.House.Price.Test$Predicted.log.SalesPrice)
+names(House.Price.Test)
+#head(new.House.Price.Test)
+
+output = data.frame(new.House.Price.Test$Id,
+                    new.House.Price.Test$Predicted.SalesPrice )
+head(output)
+write.table(output, file="test8.reg.csv", quote=F)
+
+
+```
+
+
+## Create the first Linear Model using all the features
+```{r LM12, echo=TRUE,warning=FALSE,error=FALSE,comment='',message=FALSE}
+
+## Linear Modelling for feature selection
+
+formula0.logprice <- log.SalePrice ~ . - Id - CentralAir.nameY - PoolArea
+  
+lm.log.saleprice0 = lm(formula0.logprice,data = House.Price.Train1,na.action = na.exclude)
+summary(lm.log.saleprice0)
+#plot(lm.log.saleprice1)
+
+predictions.formula0 <- predict(lm.log.saleprice0, House.Price.Train2)
+lm.rmse0 <- sqrt(mean((House.Price.Train2$log.SalePrice - predictions.formula0)^2))
+print(lm.rmse0)
+
+lm.log.sAIC0 = stepAIC(lm.log.saleprice0, direction = 'both')
+lm.log.sAIC0$anova
+
+
+#-------------------------------------  
+  
+
+
+
+  
+formula01.logprice <- log.SalePrice ~ MSSubClass + MSZoning.nameRM + LotFrontage + 
+    Neighborhood.nameNridgHt + OverallQual + OverallCond + YearBuilt + 
+    ExterQual.nameEx + ExterQual.nameTA + Foundation.namePConc + 
+    BsmtQual.nameEx + BsmtFinType1.nameGLQ + BsmtFinSF2 + CentralAir.nameN + 
+    LowQualFinSF + GrLivArea + Fireplaces + GarageType.nameAttchd + 
+    GarageFinish.nameUnf + GarageCars + ScreenPorch + log.LotArea + 
+    TotalBath
+
+lm.log.saleprice01 = lm(formula01.logprice,data = House.Price.Train1,na.action = na.exclude)
+summary(lm.log.saleprice01)
+
+#plot(lm.log.saleprice1)
+
+predictions.formula01 <- predict(lm.log.saleprice01, House.Price.Train2)
+lm.rmse01 <- sqrt(mean((House.Price.Train2$log.SalePrice - predictions.formula01)^2))
+print(lm.rmse01)
+
+fit.glm = glm(formula01.logprice , data = new.House.Price.Train)
+cv.err = cv.glm(new.House.Price.Train, fit.glm, K = 8)$delta[1]
+cv.err
+new.House.Price.Test$Predicted.log.SalesPrice <- predict(fit.glm,
+                                                         new.House.Price.Test)
+new.House.Price.Test$Predicted.SalesPrice = 10 ^ (new.House.Price.Test$Predicted.log.SalesPrice)
+#head(new.House.Price.Test)
+
+write.table(new.House.Price.Test, file="test9.csv", quote=F)
+
+
+
+
+```
+
+Looking at the plots you can see that there are a few outliers and the distribution seems to be far from normalized.
+
+
+## Apply step wise regression to get the next model
+
+```{r stepAIC1, echo=TRUE,warning=FALSE,error=FALSE,comment=''}
+## Stepwise regression for feature selection
+
+lm.log.sAIC2 = stepAIC(lm.log.saleprice2, direction = 'both')
+lm.log.sAIC2$anova
+
+```
+As per StepAIC also this model seems to have the best AIC-value.
+
+## Using the best chosen features for Linear Model, see how it is behaving with Random Forest
+
+```{r RF1, echo=TRUE,warning=FALSE,error=FALSE,comment=''}
+## Linear Modelling for feature selection
+
+rf.log.saleprice1 = randomForest(formula2.logprice,data =House.Price.Train1,na.action = na.exclude)
+summary(rf.log.saleprice1)
+#plot(lm.log.saleprice3)
+rf.predictions <- predict(rf.log.saleprice1, House.Price.Train2)
+rf.rmse <- sqrt(mean((House.Price.Train2$log.SalePrice - rf.predictions)^2))
+print(paste0("RMSE of Random Forest:  ", rf.rmse))
+
+```
+The RMSE of the Linear Model (0.0561) seems to be better than the RMSE of the Random Forest Model(0.0582).
+
+## Using the chosen features for Linear Model, see how it is behaving with Support Vector Machine
+
+```{r SVM1, echo=TRUE,warning=FALSE,error=FALSE,comment='',message=FALSE, results='markup'}
+## Linear Modelling for feature selection
+#install.packages("kernlab")
+svm.log.saleprice1 = ksvm(formula2.logprice,data =House.Price.Train1,na.action = na.exclude)
+summary(svm.log.saleprice1)
+#plot(lm.log.saleprice3)
+svm.predictions <- predict(svm.log.saleprice1, House.Price.Train2)
+svm.rmse <- sqrt(mean((House.Price.Train2$log.SalePrice - svm.predictions)^2))
+
+print(paste0("RMSE of SVM:  ", svm.rmse))
+House.Price.Train2$Predicted.log.SalesPrice <- svm.predictions
+House.Price.Train2$Predicted.SalesPrice <- 10 ^ svm.predictions
+#head(House.Price.Train2$SalePrice)
+#head(House.Price.Train2$Predicted.SalesPrice)
+
+```
+The RMSE of the Linear Model (0.0561) seems to be better than the RMSE of the Support Vector Machine(0.067).
